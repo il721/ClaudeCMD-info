@@ -118,8 +118,9 @@ if ($tpath -and (Test-Path $tpath)) {
 # (five_hour.utilization / seven_day.utilization), i.e. the exact server-side %
 # the /usage command shows. Real numbers (cover ALL usage, web + Code), refreshed
 # every few seconds while Claude Code runs — no cost-cap guessing needed.
-$pct  = $null   # 5-hour session %
-$pct7 = $null   # 7-day %
+$pct    = $null   # 5-hour session %
+$pct7   = $null   # 7-day %
+$reset5 = $null   # H:MM until the 5-hour session resets
 $widget = Join-Path $PSScriptRoot 'widget_limits.json'
 if (Test-Path $widget) {
     try {
@@ -128,6 +129,17 @@ if (Test-Path $widget) {
         if ($wAge -lt $WIDGET_MAX_AGE) {
             if ($null -ne $w.five_hour.utilization) { $pct  = [math]::Min(100.0, [double]$w.five_hour.utilization) }
             if ($null -ne $w.seven_day.utilization) { $pct7 = [math]::Min(100.0, [double]$w.seven_day.utilization) }
+            if ($w.five_hour.resets_at) {
+                try {
+                    # ConvertFrom-Json already turns the ISO-8601 string into a local
+                    # [datetime]; use it directly (re-Parsing its culture-formatted
+                    # string misreads MM/DD as DD/MM).
+                    $ra = $w.five_hour.resets_at
+                    $resetDto = if ($ra -is [datetime]) { [datetimeoffset]$ra } else { [datetimeoffset]::Parse($ra) }
+                    $span = $resetDto - [datetimeoffset]::Now
+                    if ($span.TotalSeconds -gt 0) { $reset5 = '{0}:{1:00}' -f [int][math]::Floor($span.TotalHours), $span.Minutes }
+                } catch {}
+            }
         }
     } catch {}
 }
@@ -180,13 +192,20 @@ $pctText = if ($haveUsage) { Bar $pct $BAR_WIDTH $C_BAR_HI } else { "$C_BAR_LO$(
 
 function Tk([int]$n) { "$([math]::Round($n / 1000))k" }
 
+$sep = "$C_BAR_LO$([char]0x2502)$RST"   # dim │
+
 $parts = @()
 $parts += "$C_MODEL$model$RST"
 if ($effort) { $parts += "$C_EFFORT[$effort]$RST" }
+$parts += $sep
 $parts += "$pctText"
+if ($reset5) {
+    $parts += "$sep $C_BAR_HI$reset5$RST $sep"
+}
 if ($null -ne $pct7) {
     $parts += (Bar $pct7 $BAR_WIDTH $C_EFFORT)
 }
+$parts += $sep
 $parts += "$C_TOK$(Tk $used) tokens$RST"
 
 Write-Output ($parts -join "  ")
