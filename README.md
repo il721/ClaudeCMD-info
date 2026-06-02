@@ -2,6 +2,8 @@
 
 A single-line, color status bar for [Claude Code](https://claude.com/claude-code) on Windows. It shows your model, reasoning effort, **live plan usage**, and current context size:
 
+![status bar](statusbar.png)
+
 ```
 Opus 4.8  [high]  ████████░░░░░░ 59%  █░░░░░░░░░░░░░ 6%  134k tokens
           └ effort ┘  └ 5h session ┘   └ 7-day plan ┘    └ context ┘
