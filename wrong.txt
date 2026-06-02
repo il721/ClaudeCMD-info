@@ -1,0 +1,11 @@
+Found it — this was the real root cause
+
+  Your machine runs Claude Code under Git Bash / MINGW64 (MSYS2), and Claude Code executes the status line command
+  through bash, not cmd.exe. A Windows .bat path full of backslashes gets mangled by bash (exactly like your ! type
+  C:\... became C:Usersil720506...), so the command silently failed and your bar stayed blank. That's why nothing ever
+  ran — no marker, no log, no output — no matter how many times we restarted.
+
+  The fix: I changed settings.json to skip the .bat and call PowerShell directly, in a bash‑safe form (full quoted pwsh  path + forward slashes):
+
+  "C:/Program Files/PowerShell/7/pwsh.exe" -NoProfile -ExecutionPolicy Bypass -File
+  C:/Users/il720506/.claude/statusline_model.ps1

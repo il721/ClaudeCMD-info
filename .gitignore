@@ -1,0 +1,12 @@
+# Logs
+*.log
+
+# Local Claude Code settings (machine-specific)
+.claude/settings.local.json
+
+# Status-line runtime caches / locks
+_usage5h.json
+_usage.lock
+.usage_cache.txt
+.usage_cache.txt.lock
+.usage_metrics.json
