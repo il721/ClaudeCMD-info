@@ -5,11 +5,12 @@ A single-line, color status bar for [Claude Code](https://claude.com/claude-code
 ![status bar](statusbar.png)
 
 ```
-Opus 4.8  [high]  ████████░░░░░░ 59%  █░░░░░░░░░░░░░ 6%  134k tokens
-          └ effort ┘  └ 5h session ┘   └ 7-day plan ┘    └ context ┘
+Opus 4.8  [high]  │  ████████░░░░░░ 59%  │ 4:30 │  █░░░░░░░░░░░░░ 6%  │  134k tokens
+          └effort┘     └ 5h session ┘   └reset┘    └ 7-day plan ┘      └ context ┘
 ```
 
 - **Bar 1 (blue) — 5-hour session usage.** The same number the `/usage` command shows.
+- **`H:MM` (blue) — time until the 5-hour session resets**, shown between the two bars.
 - **Bar 2 (amber) — 7-day plan usage.**
 - Both bars turn **amber at ≥75%** and **red at ≥90%**.
 - **`N tokens`** — current conversation context size.
