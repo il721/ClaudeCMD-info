@@ -74,7 +74,8 @@ try { $data = $raw | ConvertFrom-Json } catch { $data = $null }
 $BAR_WIDTH      = 14
 $USAGE_CAP_USD  = 20.0   # FALLBACK only: ~5-hour plan limit (cost-equiv) for ccusage estimate.
 $REFRESH_SEC    = 45     # max cache age before a background ccusage refresh fires
-$WIDGET_MAX_AGE = 600    # max age (s) of widget_limits.json before we distrust it
+$WIDGET_MAX_AGE = 600    # max age (s) of five_hour data before we distrust it (time-sensitive)
+$WIDGET_7D_MAX_AGE = 21600  # 6h: seven_day usage moves slowly, trust it on a much longer leash
 
 # ── ANSI helpers ─────────────────────────────────────────────────────────────
 $RST = "$([char]27)[0m"
@@ -126,20 +127,28 @@ if (Test-Path $widget) {
     try {
         $w = Get-Content $widget -Raw | ConvertFrom-Json
         $wAge = ([datetimeoffset]::Now - [datetimeoffset]::FromUnixTimeMilliseconds([long]$w._ts)).TotalSeconds
+        # 7-day usage barely moves over minutes, so trust it on a long leash — this
+        # keeps the amber bar visible during idle stretches when Claude Code hasn't
+        # refreshed the widget cache. (The 5-hour value below uses a strict gate.)
+        if ($wAge -lt $WIDGET_7D_MAX_AGE -and $null -ne $w.seven_day.utilization) {
+            $pct7 = [math]::Min(100.0, [double]$w.seven_day.utilization)
+        }
+        # resets_at is an absolute future timestamp — still accurate when the cache
+        # is stale (and the >0 guard hides it once it passes), so compute it on the
+        # long leash too rather than letting it vanish with the 5-hour value.
+        if ($wAge -lt $WIDGET_7D_MAX_AGE -and $w.five_hour.resets_at) {
+            try {
+                # ConvertFrom-Json already turns the ISO-8601 string into a local
+                # [datetime]; use it directly (re-Parsing its culture-formatted
+                # string misreads MM/DD as DD/MM).
+                $ra = $w.five_hour.resets_at
+                $resetDto = if ($ra -is [datetime]) { [datetimeoffset]$ra } else { [datetimeoffset]::Parse($ra) }
+                $span = $resetDto - [datetimeoffset]::Now
+                if ($span.TotalSeconds -gt 0) { $reset5 = '{0}:{1:00}' -f [int][math]::Floor($span.TotalHours), $span.Minutes }
+            } catch {}
+        }
         if ($wAge -lt $WIDGET_MAX_AGE) {
             if ($null -ne $w.five_hour.utilization) { $pct  = [math]::Min(100.0, [double]$w.five_hour.utilization) }
-            if ($null -ne $w.seven_day.utilization) { $pct7 = [math]::Min(100.0, [double]$w.seven_day.utilization) }
-            if ($w.five_hour.resets_at) {
-                try {
-                    # ConvertFrom-Json already turns the ISO-8601 string into a local
-                    # [datetime]; use it directly (re-Parsing its culture-formatted
-                    # string misreads MM/DD as DD/MM).
-                    $ra = $w.five_hour.resets_at
-                    $resetDto = if ($ra -is [datetime]) { [datetimeoffset]$ra } else { [datetimeoffset]::Parse($ra) }
-                    $span = $resetDto - [datetimeoffset]::Now
-                    if ($span.TotalSeconds -gt 0) { $reset5 = '{0}:{1:00}' -f [int][math]::Floor($span.TotalHours), $span.Minutes }
-                } catch {}
-            }
         }
     } catch {}
 }
