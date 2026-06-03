@@ -76,6 +76,7 @@ $USAGE_CAP_USD  = 20.0   # FALLBACK only: ~5-hour plan limit (cost-equiv) for cc
 $REFRESH_SEC    = 45     # max cache age before a background ccusage refresh fires
 $WIDGET_MAX_AGE = 600    # max age (s) of five_hour data before we distrust it (time-sensitive)
 $WIDGET_7D_MAX_AGE = 21600  # 6h: seven_day usage moves slowly, trust it on a much longer leash
+$WIDGET_REFRESH_SEC = 60    # refresh widget_limits.json (via rate-limit headers) when older than this
 
 # ── ANSI helpers ─────────────────────────────────────────────────────────────
 $RST = "$([char]27)[0m"
@@ -151,6 +152,24 @@ if (Test-Path $widget) {
             if ($null -ne $w.five_hour.utilization) { $pct  = [math]::Min(100.0, [double]$w.five_hour.utilization) }
         }
     } catch {}
+}
+
+# Keep widget_limits.json fresh ourselves — CC 2.1.161 no longer live-writes it.
+# Fire-and-forget the header-based refresher (widget_refresh.ps1) when the cache
+# is stale, lock-guarded so render bursts don't spawn a pile of workers. This
+# restores the 7-day bar + 5-hour reset time, which have no offline fallback.
+$wFileAge = if (Test-Path $widget) { ((Get-Date) - (Get-Item $widget).LastWriteTime).TotalSeconds } else { 9999 }
+if ($wFileAge -gt $WIDGET_REFRESH_SEC) {
+    $wlock = Join-Path $PSScriptRoot '_widget.lock'
+    $wlockAge = if (Test-Path $wlock) { ((Get-Date) - (Get-Item $wlock).LastWriteTime).TotalSeconds } else { 9999 }
+    if ($wlockAge -gt 60) {
+        try {
+            Set-Content $wlock (Get-Date -Format o)
+            Start-Process -WindowStyle Hidden -FilePath '@@PWSH@@' `
+                -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',
+                                (Join-Path $PSScriptRoot 'widget_refresh.ps1'))
+        } catch {}
+    }
 }
 
 # FALLBACK: cached ccusage cost ÷ cap (a rough estimate). Only used — and ccusage
@@ -250,9 +269,73 @@ finally { Remove-Item $lock -ErrorAction SilentlyContinue }
 '@
 $refresh = $refresh.Replace('@@NODEDIR@@', $nodeDir).Replace('@@NPMBIN@@', $npmBin).Replace('@@CCUSAGE@@', $ccusage)
 
+# ── 6b. widget_refresh.ps1 (embedded; no substitution needed) ────────────────
+# Rebuilds widget_limits.json from the Anthropic unified rate-limit response
+# headers of a minimal /v1/messages call. CC 2.1.161 stopped live-writing that
+# file, so the 7-day bar + 5-hour reset time (server-side data with no offline
+# fallback) would otherwise vanish. The /api/organizations/<id>/usage endpoint
+# needs a CC-only account session the OAuth token can't supply, but the token IS
+# valid for /v1/messages, whose headers carry 5h/7d utilization + 5h reset.
+$widgetRefresh = @'
+# ─────────────────────────────────────────────────────────────────────────────
+# widget_refresh.ps1 — background worker for the status line.
+# Rebuilds widget_limits.json from the Anthropic unified rate-limit RESPONSE
+# HEADERS of a single minimal /v1/messages call (max_tokens:1 Haiku, negligible
+# usage; no Claude Code impersonation). Restores the 7-day bar + 5-hour reset
+# time after CC 2.1.161 stopped live-writing widget_limits.json itself.
+# Spawned fire-and-forget by statusline_model.ps1; never runs inline with render.
+# ─────────────────────────────────────────────────────────────────────────────
+$ErrorActionPreference = 'SilentlyContinue'
+
+$cred   = Join-Path $PSScriptRoot '.credentials.json'
+$widget = Join-Path $PSScriptRoot 'widget_limits.json'
+$lock   = Join-Path $PSScriptRoot '_widget.lock'
+
+try {
+    $tok = (Get-Content $cred -Raw | ConvertFrom-Json).claudeAiOauth.accessToken
+    if (-not $tok) { return }
+
+    $headers = @{
+        'Authorization'     = "Bearer $tok"
+        'anthropic-beta'    = 'oauth-2025-04-20'
+        'anthropic-version' = '2023-06-01'
+        'content-type'      = 'application/json'
+    }
+    $body = '{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"."}]}'
+
+    $resp = Invoke-WebRequest -Uri 'https://api.anthropic.com/v1/messages' `
+        -Method Post -Headers $headers -Body $body -UseBasicParsing
+    $h = $resp.Headers
+    function HVal($name) { $v = $h[$name]; if ($v -is [array]) { $v[0] } else { $v } }
+
+    $u5  = [double](HVal 'anthropic-ratelimit-unified-5h-utilization')   # 0..1
+    $u7  = [double](HVal 'anthropic-ratelimit-unified-7d-utilization')   # 0..1
+    $r5  = [long](HVal 'anthropic-ratelimit-unified-5h-reset')           # unix seconds
+    $org = HVal 'anthropic-organization-id'
+
+    $resetIso = [DateTimeOffset]::FromUnixTimeSeconds($r5).ToString("yyyy-MM-ddTHH:mm:ss.ffffffzzz")
+
+    ([ordered]@{
+        _endpoint = "/api/organizations/$org/usage"
+        _ts       = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
+        _source   = 'widget_refresh.ps1 (ratelimit headers)'
+        five_hour = [ordered]@{
+            utilization = [math]::Round($u5 * 100.0, 0)
+            resets_at   = $resetIso
+        }
+        seven_day = [ordered]@{
+            utilization = [math]::Round($u7 * 100.0, 0)
+        }
+    } | ConvertTo-Json -Depth 5) | Set-Content $widget -Encoding utf8
+}
+catch {}
+finally { Remove-Item $lock -ErrorAction SilentlyContinue }
+'@
+
 WriteNoBom (Join-Path $claudeDir 'statusline_model.ps1') $statusline
 WriteNoBom (Join-Path $claudeDir 'usage_refresh.ps1')    $refresh
-Ok "Wrote statusline_model.ps1 + usage_refresh.ps1"
+WriteNoBom (Join-Path $claudeDir 'widget_refresh.ps1')   $widgetRefresh
+Ok "Wrote statusline_model.ps1 + usage_refresh.ps1 + widget_refresh.ps1"
 
 # ── 7. Merge settings.json ───────────────────────────────────────────────────
 $settingsPath = Join-Path $claudeDir 'settings.json'

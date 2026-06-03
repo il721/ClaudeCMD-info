@@ -5,7 +5,7 @@
       pwsh -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1
 
   - Removes the "statusLine" key from settings.json (other keys untouched).
-  - Deletes statusline_model.ps1, usage_refresh.ps1, and the usage cache/lock.
+  - Deletes statusline_model.ps1, usage_refresh.ps1, widget_refresh.ps1, and the usage cache/locks.
   - Leaves settings.json.bak and effortLevel alone.
 #>
 
@@ -43,7 +43,7 @@ if (Test-Path $settingsPath) {
 
 # ── 2. Delete the status-line files ──────────────────────────────────────────
 $removed = 0
-foreach ($f in 'statusline_model.ps1','usage_refresh.ps1','_usage5h.json','_usage.lock') {
+foreach ($f in 'statusline_model.ps1','usage_refresh.ps1','widget_refresh.ps1','_usage5h.json','_usage.lock','_widget.lock') {
     $p = Join-Path $claudeDir $f
     if (Test-Path $p) { Remove-Item $p -Force; Ok "Deleted $f"; $removed++ }
 }
