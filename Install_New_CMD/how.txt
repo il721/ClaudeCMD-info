@@ -6,10 +6,36 @@ To set up another computer
   pwsh -NoProfile -ExecutionPolicy Bypass -File install.ps1
   3. Restart Claude Code, press Shift+Tab.
 
-  No calibration needed: the 5h and 7d usage bars read live from widget_limits.json — Claude Code's own cache of
-  the /usage data — so they match the /usage command exactly. ccusage (cost / $USAGE_CAP_USD) is only a fallback
-  used when that cache is missing or stale; only then is it worth setting $USAGE_CAP_USD in
+  The installer writes three scripts into ~/.claude/ :
+    - statusline_model.ps1 : renders the line (read fresh every render, no restart needed to edit).
+    - widget_refresh.ps1    : background worker that keeps the usage data fresh (see below).
+    - usage_refresh.ps1     : background worker for the ccusage cost fallback.
+
+  Status line layout:  Model  [effort]  | <5h bar> %  | <5h reset> |  <7d bar> %  |  <context> tokens
+    - Bar 1 (blue)  = 5-hour session usage   (the same number the /usage command shows)
+    - <5h reset>    = H:MM until the 5-hour session resets (ticks down live every render, free)
+    - Bar 2 (amber) = 7-day plan usage
+    Both bars turn amber at >=75% and red at >=90%.
+
+  Where the numbers come from:
+    The bars read from widget_limits.json — the authoritative server-side %s covering ALL usage (web + Code).
+    Claude Code used to write this file itself, but as of CC 2.1.161 it stopped (and /usage no longer refreshes
+    it). So widget_refresh.ps1 now keeps it current: when the file is older than $WIDGET_REFRESH_SEC, the status
+    line fires the worker, which makes ONE minimal max_tokens:1 Haiku call to /v1/messages and reads the 5h/7d
+    utilization + 5h reset from the response's anthropic-ratelimit-unified-* headers. Cost is negligible
+    (~a handful of tokens) and there is no Claude Code impersonation. The OAuth token is read from
+    ~/.claude/.credentials.json; nothing is hardcoded.
+
+  No calibration needed. ccusage (cost / $USAGE_CAP_USD) is only a deeper fallback, used if widget_limits.json is
+  missing AND the header refresh fails; only then is it worth setting $USAGE_CAP_USD in
   ~/.claude/statusline_model.ps1 to  current_5h_cost / (usage_percent / 100).
 
-  Status line layout:  Model  [effort]  <5h bar> %  <7d bar> %  <context> tokens
-  Both bars turn amber at >=75% and red at >=90%.
+  Tunables (top of ~/.claude/statusline_model.ps1, no restart needed):
+    - $WIDGET_REFRESH_SEC : how stale widget_limits.json may get before a refresh fires (default 60s).
+                            Lower = fresher %s, more tiny API calls; higher = fewer calls.
+    - $WIDGET_MAX_AGE     : max age (s) of the 5h % before it's distrusted (default 600).
+    - $WIDGET_7D_MAX_AGE  : longer leash (default 21600 = 6h) so the slow-moving 7d bar + reset time stay
+                            visible during idle stretches.
+
+  Uninstall:  pwsh -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1
+  (removes the three scripts + caches/locks and strips statusLine from settings.json; leaves widget_limits.json).
