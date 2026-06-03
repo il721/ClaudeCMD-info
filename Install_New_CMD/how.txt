@@ -21,10 +21,10 @@ To set up another computer
     The bars read from widget_limits.json — the authoritative server-side %s covering ALL usage (web + Code).
     Claude Code used to write this file itself, but as of CC 2.1.161 it stopped (and /usage no longer refreshes
     it). So widget_refresh.ps1 now keeps it current: when the file is older than $WIDGET_REFRESH_SEC, the status
-    line fires the worker, which makes ONE minimal max_tokens:1 Haiku call to /v1/messages and reads the 5h/7d
-    utilization + 5h reset from the response's anthropic-ratelimit-unified-* headers. Cost is negligible
-    (~a handful of tokens) and there is no Claude Code impersonation. The OAuth token is read from
-    ~/.claude/.credentials.json; nothing is hardcoded.
+    line fires this background worker, which makes one minimal max_tokens:1 Haiku call to /v1/messages and reads
+    the 5h/7d utilization + reset time from the response's anthropic-ratelimit-unified-* headers. Cost is
+    negligible (a handful of tokens), there's no Claude Code impersonation, and the OAuth token is read from
+    ~/.claude/.credentials.json (nothing hardcoded).
 
   No calibration needed. ccusage (cost / $USAGE_CAP_USD) is only a deeper fallback, used if widget_limits.json is
   missing AND the header refresh fails; only then is it worth setting $USAGE_CAP_USD in
