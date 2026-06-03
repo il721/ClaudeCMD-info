@@ -76,4 +76,6 @@ Colors are defined by the `Fg r g b` helpers near the top.
 | `Install_New_CMD/install.ps1` | Current installer (embeds the latest status-line scripts). |
 | `Install_New_CMD/uninstall.ps1` | Uninstaller. |
 | `Install_New_CMD/how.txt` | Quick setup notes for a new machine. |
+| `install.ps1` | Root copy of the installer, kept identical to `Install_New_CMD/install.ps1`. |
+| `uninstall.ps1` | Root copy of the uninstaller, kept identical to `Install_New_CMD/uninstall.ps1`. |
 | `CLI_01.png`, `pwrshl.png` | Design references. |
