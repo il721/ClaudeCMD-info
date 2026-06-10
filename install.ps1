@@ -311,9 +311,11 @@ try {
     $u5  = [double](HVal 'anthropic-ratelimit-unified-5h-utilization')   # 0..1
     $u7  = [double](HVal 'anthropic-ratelimit-unified-7d-utilization')   # 0..1
     $r5  = [long](HVal 'anthropic-ratelimit-unified-5h-reset')           # unix seconds
+    $r7  = [long](HVal 'anthropic-ratelimit-unified-7d-reset')           # unix seconds
     $org = HVal 'anthropic-organization-id'
 
-    $resetIso = [DateTimeOffset]::FromUnixTimeSeconds($r5).ToString("yyyy-MM-ddTHH:mm:ss.ffffffzzz")
+    $resetIso  = [DateTimeOffset]::FromUnixTimeSeconds($r5).ToString("yyyy-MM-ddTHH:mm:ss.ffffffzzz")
+    $reset7Iso = [DateTimeOffset]::FromUnixTimeSeconds($r7).ToString("yyyy-MM-ddTHH:mm:ss.ffffffzzz")
 
     ([ordered]@{
         _endpoint = "/api/organizations/$org/usage"
@@ -325,6 +327,7 @@ try {
         }
         seven_day = [ordered]@{
             utilization = [math]::Round($u7 * 100.0, 0)
+            resets_at   = $reset7Iso
         }
     } | ConvertTo-Json -Depth 5) | Set-Content $widget -Encoding utf8
 }
