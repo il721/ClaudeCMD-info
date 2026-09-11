@@ -94,10 +94,16 @@ $BAR_EMPTY= [char]0x2591
 $model = if ($data -and $data.model -and $data.model.display_name) { $data.model.display_name } else { "Claude" }
 
 $effort = $null
-try {
-    $cfg = Get-Content (Join-Path $PSScriptRoot 'settings.json') -Raw | ConvertFrom-Json
-    if ($cfg.effortLevel) { $effort = $cfg.effortLevel }
-} catch {}
+if ($data -and $data.effort -and $data.effort.level) {
+    # Claude Code sends the live effective effort on stdin — authoritative, and
+    # it already accounts for per-model overrides (settings.json modelSettings).
+    $effort = $data.effort.level
+} else {
+    try {
+        $cfg = Get-Content (Join-Path $PSScriptRoot 'settings.json') -Raw | ConvertFrom-Json
+        if ($cfg.effortLevel) { $effort = $cfg.effortLevel }
+    } catch {}
+}
 
 # ── Context size from the transcript ─────────────────────────────────────────
 $used = 0
