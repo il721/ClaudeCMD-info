@@ -2,8 +2,9 @@
   install.ps1 — Claude Code "model + plan usage" status line installer.
 
   Status line shows: model  [effort]  <5h bar>  <7d bar>  <context tokens>.
-  The 5h/7d bars read live from widget_limits.json (Claude Code's own /usage
-  cache); ccusage cost ÷ cap is only a fallback when that cache is unavailable.
+  The 5h/7d bars read live from Claude Code's own stdin payload (rate_limits) —
+  the same server-side numbers /usage shows; ccusage cost ÷ cap is only a fallback
+  for older Claude Code builds that do not send the field.
 
   Run it with PowerShell 7:
       pwsh -NoProfile -ExecutionPolicy Bypass -File install.ps1
@@ -62,8 +63,8 @@ $statusline = @'
 # statusline_model.ps1  —  Claude Code status line (single line)
 #   "Opus 4.8  [high]  ████░░░░ 54%  █░░░░░░░ 6%  134k tokens"
 #   bar 1 (blue)  = 5-hour session usage   bar 2 (amber) = 7-day usage
-#   both pulled live from widget_limits.json (Claude Code's own /usage cache);
-#   ccusage cost ÷ cap is only a fallback. tokens = current context size.
+#   both read straight from Claude Code's stdin payload (rate_limits) — the same
+#   server-side numbers /usage shows. tokens = current context size.
 # ─────────────────────────────────────────────────────────────────────────────
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -74,9 +75,6 @@ try { $data = $raw | ConvertFrom-Json } catch { $data = $null }
 $BAR_WIDTH      = 14
 $USAGE_CAP_USD  = 20.0   # FALLBACK only: ~5-hour plan limit (cost-equiv) for ccusage estimate.
 $REFRESH_SEC    = 45     # max cache age before a background ccusage refresh fires
-$WIDGET_MAX_AGE = 600    # max age (s) of five_hour data before we distrust it (time-sensitive)
-$WIDGET_7D_MAX_AGE = 21600  # 6h: seven_day usage moves slowly, trust it on a much longer leash
-$WIDGET_REFRESH_SEC = 60    # refresh widget_limits.json (via rate-limit headers) when older than this
 
 # ── ANSI helpers ─────────────────────────────────────────────────────────────
 $RST = "$([char]27)[0m"
@@ -121,65 +119,28 @@ if ($tpath -and (Test-Path $tpath)) {
     }
 }
 
-# ── Plan usage ────────────────────────────────────────────────────────────────
-# PRIMARY source: widget_limits.json — Claude Code's own cache of the /usage API
-# (five_hour.utilization / seven_day.utilization), i.e. the exact server-side %
-# the /usage command shows. Real numbers (cover ALL usage, web + Code), refreshed
-# every few seconds while Claude Code runs — no cost-cap guessing needed.
+# ── 5-hour / 7-day plan usage ────────────────────────────────────────
+# Claude Code hands us the authoritative server-side rate-limit numbers on stdin
+# (`rate_limits`) — the same values `/usage` shows, covering ALL usage (web +
+# Code). No cache file, no background refresher, no cost-cap guessing.
 $pct    = $null   # 5-hour session %
 $pct7   = $null   # 7-day %
 $reset5 = $null   # H:MM until the 5-hour session resets
-$widget = Join-Path $PSScriptRoot 'widget_limits.json'
-if (Test-Path $widget) {
-    try {
-        $w = Get-Content $widget -Raw | ConvertFrom-Json
-        $wAge = ([datetimeoffset]::Now - [datetimeoffset]::FromUnixTimeMilliseconds([long]$w._ts)).TotalSeconds
-        # 7-day usage barely moves over minutes, so trust it on a long leash — this
-        # keeps the amber bar visible during idle stretches when Claude Code hasn't
-        # refreshed the widget cache. (The 5-hour value below uses a strict gate.)
-        if ($wAge -lt $WIDGET_7D_MAX_AGE -and $null -ne $w.seven_day.utilization) {
-            $pct7 = [math]::Min(100.0, [double]$w.seven_day.utilization)
-        }
-        # resets_at is an absolute future timestamp — still accurate when the cache
-        # is stale (and the >0 guard hides it once it passes), so compute it on the
-        # long leash too rather than letting it vanish with the 5-hour value.
-        if ($wAge -lt $WIDGET_7D_MAX_AGE -and $w.five_hour.resets_at) {
-            try {
-                # ConvertFrom-Json already turns the ISO-8601 string into a local
-                # [datetime]; use it directly (re-Parsing its culture-formatted
-                # string misreads MM/DD as DD/MM).
-                $ra = $w.five_hour.resets_at
-                $resetDto = if ($ra -is [datetime]) { [datetimeoffset]$ra } else { [datetimeoffset]::Parse($ra) }
-                $span = $resetDto - [datetimeoffset]::Now
-                if ($span.TotalSeconds -gt 0) { $reset5 = '{0}:{1:00}' -f [int][math]::Floor($span.TotalHours), $span.Minutes }
-            } catch {}
-        }
-        if ($wAge -lt $WIDGET_MAX_AGE) {
-            if ($null -ne $w.five_hour.utilization) { $pct  = [math]::Min(100.0, [double]$w.five_hour.utilization) }
-        }
-    } catch {}
-}
-
-# Keep widget_limits.json fresh ourselves — CC 2.1.161 no longer live-writes it.
-# Fire-and-forget the header-based refresher (widget_refresh.ps1) when the cache
-# is stale, lock-guarded so render bursts don't spawn a pile of workers. This
-# restores the 7-day bar + 5-hour reset time, which have no offline fallback.
-$wFileAge = if (Test-Path $widget) { ((Get-Date) - (Get-Item $widget).LastWriteTime).TotalSeconds } else { 9999 }
-if ($wFileAge -gt $WIDGET_REFRESH_SEC) {
-    $wlock = Join-Path $PSScriptRoot '_widget.lock'
-    $wlockAge = if (Test-Path $wlock) { ((Get-Date) - (Get-Item $wlock).LastWriteTime).TotalSeconds } else { 9999 }
-    if ($wlockAge -gt 60) {
+$rl = if ($data) { $data.rate_limits } else { $null }
+if ($rl) {
+    if ($null -ne $rl.five_hour.used_percentage) { $pct  = [math]::Min(100.0, [double]$rl.five_hour.used_percentage) }
+    if ($null -ne $rl.seven_day.used_percentage) { $pct7 = [math]::Min(100.0, [double]$rl.seven_day.used_percentage) }
+    if ($rl.five_hour.resets_at) {
+        # resets_at is Unix seconds; the >0 guard hides it once it passes.
         try {
-            Set-Content $wlock (Get-Date -Format o)
-            Start-Process -WindowStyle Hidden -FilePath '@@PWSH@@' `
-                -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',
-                                (Join-Path $PSScriptRoot 'widget_refresh.ps1'))
+            $span = [datetimeoffset]::FromUnixTimeSeconds([long]$rl.five_hour.resets_at) - [datetimeoffset]::Now
+            if ($span.TotalSeconds -gt 0) { $reset5 = '{0}:{1:00}' -f [int][math]::Floor($span.TotalHours), $span.Minutes }
         } catch {}
     }
 }
 
 # FALLBACK: cached ccusage cost ÷ cap (a rough estimate). Only used — and ccusage
-# only spawned — when the widget cache is missing or stale.
+# only spawned — when Claude Code does not send rate_limits (older builds).
 if ($null -eq $pct) {
     $cache = Join-Path $PSScriptRoot '_usage5h.json'
     $cost = $null
@@ -275,76 +236,9 @@ finally { Remove-Item $lock -ErrorAction SilentlyContinue }
 '@
 $refresh = $refresh.Replace('@@NODEDIR@@', $nodeDir).Replace('@@NPMBIN@@', $npmBin).Replace('@@CCUSAGE@@', $ccusage)
 
-# ── 6b. widget_refresh.ps1 (embedded; no substitution needed) ────────────────
-# Rebuilds widget_limits.json from the Anthropic unified rate-limit response
-# headers of a minimal /v1/messages call. CC 2.1.161 stopped live-writing that
-# file, so the 7-day bar + 5-hour reset time (server-side data with no offline
-# fallback) would otherwise vanish. The /api/organizations/<id>/usage endpoint
-# needs a CC-only account session the OAuth token can't supply, but the token IS
-# valid for /v1/messages, whose headers carry 5h/7d utilization + 5h reset.
-$widgetRefresh = @'
-# ─────────────────────────────────────────────────────────────────────────────
-# widget_refresh.ps1 — background worker for the status line.
-# Rebuilds widget_limits.json from the Anthropic unified rate-limit RESPONSE
-# HEADERS of a single minimal /v1/messages call (max_tokens:1 Haiku, negligible
-# usage; no Claude Code impersonation). Restores the 7-day bar + 5-hour reset
-# time after CC 2.1.161 stopped live-writing widget_limits.json itself.
-# Spawned fire-and-forget by statusline_model.ps1; never runs inline with render.
-# ─────────────────────────────────────────────────────────────────────────────
-$ErrorActionPreference = 'SilentlyContinue'
-
-$cred   = Join-Path $PSScriptRoot '.credentials.json'
-$widget = Join-Path $PSScriptRoot 'widget_limits.json'
-$lock   = Join-Path $PSScriptRoot '_widget.lock'
-
-try {
-    $tok = (Get-Content $cred -Raw | ConvertFrom-Json).claudeAiOauth.accessToken
-    if (-not $tok) { return }
-
-    $headers = @{
-        'Authorization'     = "Bearer $tok"
-        'anthropic-beta'    = 'oauth-2025-04-20'
-        'anthropic-version' = '2023-06-01'
-        'content-type'      = 'application/json'
-    }
-    $body = '{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"."}]}'
-
-    $resp = Invoke-WebRequest -Uri 'https://api.anthropic.com/v1/messages' `
-        -Method Post -Headers $headers -Body $body -UseBasicParsing
-    $h = $resp.Headers
-    function HVal($name) { $v = $h[$name]; if ($v -is [array]) { $v[0] } else { $v } }
-
-    $u5  = [double](HVal 'anthropic-ratelimit-unified-5h-utilization')   # 0..1
-    $u7  = [double](HVal 'anthropic-ratelimit-unified-7d-utilization')   # 0..1
-    $r5  = [long](HVal 'anthropic-ratelimit-unified-5h-reset')           # unix seconds
-    $r7  = [long](HVal 'anthropic-ratelimit-unified-7d-reset')           # unix seconds
-    $org = HVal 'anthropic-organization-id'
-
-    $resetIso  = [DateTimeOffset]::FromUnixTimeSeconds($r5).ToString("yyyy-MM-ddTHH:mm:ss.ffffffzzz")
-    $reset7Iso = [DateTimeOffset]::FromUnixTimeSeconds($r7).ToString("yyyy-MM-ddTHH:mm:ss.ffffffzzz")
-
-    ([ordered]@{
-        _endpoint = "/api/organizations/$org/usage"
-        _ts       = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
-        _source   = 'widget_refresh.ps1 (ratelimit headers)'
-        five_hour = [ordered]@{
-            utilization = [math]::Round($u5 * 100.0, 0)
-            resets_at   = $resetIso
-        }
-        seven_day = [ordered]@{
-            utilization = [math]::Round($u7 * 100.0, 0)
-            resets_at   = $reset7Iso
-        }
-    } | ConvertTo-Json -Depth 5) | Set-Content $widget -Encoding utf8
-}
-catch {}
-finally { Remove-Item $lock -ErrorAction SilentlyContinue }
-'@
-
 WriteNoBom (Join-Path $claudeDir 'statusline_model.ps1') $statusline
 WriteNoBom (Join-Path $claudeDir 'usage_refresh.ps1')    $refresh
-WriteNoBom (Join-Path $claudeDir 'widget_refresh.ps1')   $widgetRefresh
-Ok "Wrote statusline_model.ps1 + usage_refresh.ps1 + widget_refresh.ps1"
+Ok "Wrote statusline_model.ps1 + usage_refresh.ps1"
 
 # ── 7. Merge settings.json ───────────────────────────────────────────────────
 $settingsPath = Join-Path $claudeDir 'settings.json'
@@ -374,7 +268,7 @@ Write-Host ""
 Ok  "Install complete."
 Write-Host "Next steps:" -ForegroundColor White
 Write-Host "  1. Restart Claude Code, then press Shift+Tab to refresh the status line." -ForegroundColor Gray
-Write-Host "  2. The 5h/7d bars use Claude Code's own /usage data (widget_limits.json)" -ForegroundColor Gray
+Write-Host "  2. The 5h/7d bars use Claude Code's own /usage data (sent on stdin)" -ForegroundColor Gray
 Write-Host "     automatically - no calibration needed." -ForegroundColor Gray
 Write-Host '  3. (Optional) Only if the widget cache is ever missing and the ccusage' -ForegroundColor Gray
 Write-Host '     fallback kicks in, calibrate $USAGE_CAP_USD in ~/.claude/statusline_model.ps1' -ForegroundColor Gray

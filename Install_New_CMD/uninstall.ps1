@@ -5,7 +5,8 @@
       pwsh -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1
 
   - Removes the "statusLine" key from settings.json (other keys untouched).
-  - Deletes statusline_model.ps1, usage_refresh.ps1, widget_refresh.ps1, and the usage cache/locks.
+  - Deletes statusline_model.ps1, usage_refresh.ps1, and the usage cache/locks (plus
+    widget_refresh.ps1 and its lock, left over from older installs).
   - Leaves settings.json.bak and effortLevel alone.
 #>
 
